@@ -121,6 +121,12 @@ DATA_COLUMN_REGISTRY: Dict[str, Dict[str, Any]] = {
         "conversions": {"percent": lambda x: x * 100, "microstrain": lambda x: x * 1e6},
         "standardize_from": {"percent": lambda x: x / 100, "microstrain": lambda x: x / 1e6},
     },
+    "strain": {  # Alias for axial_strain
+        "standard_name": AXIAL_STRAIN_COL,
+        "label": "Axial Strain (ε)",
+        "default_units": "unitless",
+        "conversions": {"percent": lambda x: x * 100, "microstrain": lambda x: x * 1e6},
+    },
     "axial_stress": {
         "standard_name": AXIAL_STRESS_MPA_COL,
         "label": "Axial Stress (σ) (MPa)",
@@ -138,6 +144,17 @@ DATA_COLUMN_REGISTRY: Dict[str, Dict[str, Any]] = {
             "psi": lambda x: x / 145.038,
         },
         "auto_scale_options": [(1000, "GPa"), (1, "MPa"), (1e-3, "kPa")],
+    },
+    "stress": {  # Alias for axial_stress
+        "standard_name": AXIAL_STRESS_MPA_COL,
+        "label": "Axial Stress (σ) (MPa)",
+        "default_units": "MPa",
+        "conversions": {
+            "GPa": lambda x: x / 1000,
+            "kPa": lambda x: x * 1000,
+            "psi": lambda x: x * 145.038,
+            "ksi": lambda x: x * 0.145038,
+        },
     },
     "shear_strain": {
         "standard_name": SHEAR_STRAIN_COL,
