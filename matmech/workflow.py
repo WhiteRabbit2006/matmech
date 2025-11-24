@@ -149,8 +149,21 @@ def run_analysis_workflow(script_path: str, user_config: Dict[str, Any]) -> None
 
     # === 3. DATA LOADING AND STANDARDIZATION ===
     full_raw_df = common_utils.load_csv_data(input_file_path)
-    clean_df = pd.DataFrame()
     sources = final_config.get("column_sources", {})
+
+    # Convert all relevant source columns to numeric, coercing errors, and clean the DataFrame.
+    # This handles cases where CSVs from testing software include non-numeric header/footer rows.
+    source_cols = [
+        s["raw_col"] for s in sources.values() if s.get("raw_col") in full_raw_df.columns
+    ]
+    for col in source_cols:
+        full_raw_df[col] = pd.to_numeric(full_raw_df[col], errors="coerce")
+
+    # Drop rows where any of the essential source columns are NaN. This removes metadata rows.
+    if source_cols:
+        full_raw_df = full_raw_df.dropna(subset=source_cols).reset_index(drop=True)
+
+    clean_df = pd.DataFrame()
     inversion_flags = final_config.get("inversion_flags", {})
     tare_options = final_config.get("tare_options", {})
 
