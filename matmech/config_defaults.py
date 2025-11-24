@@ -179,6 +179,14 @@ DEFAULT_PLOTS: Dict[str, Dict[str, Any]] = {
         "phases": ["*"],
         "type": "static",
     },
+    "force_displacement_static": {
+        "x_col": "displacement",
+        "y_col": "force",
+        "title": "{phase_name} - Force vs. Displacement",
+        "output_filename": "{phase_name}_force_displacement_static",
+        "phases": ["*"],
+        "type": "static",
+    },
     "force_position_animated": {
         "x_col": "position",
         "y_col": "force",
