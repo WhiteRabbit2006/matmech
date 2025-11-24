@@ -36,7 +36,10 @@ SOFTWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "column_sources": {
             "time": {"raw_col": "Total Time (s)", "raw_units": "s"},
             "position": {"raw_col": "Position (mm)", "raw_units": "mm"},
-            "force": {"raw_col": "Force (kN)", "raw_units": "kN"},
+            "force": [
+                {"raw_col": "Force (kN)", "raw_units": "kN"},
+                {"raw_col": "Force (N)", "raw_units": "N"},
+            ],
             "rotation": {"raw_col": "Rotation (deg)", "raw_units": "deg"},
             "torque": {"raw_col": "Torque (N·m)", "raw_units": "N·m"},
         },
@@ -47,7 +50,10 @@ SOFTWARE_PROFILES: Dict[str, Dict[str, Any]] = {
         "column_sources": {
             "time": {"raw_col": "Time (s)", "raw_units": "s"},
             "position": {"raw_col": "Displacement (mm)", "raw_units": "mm"},
-            "force": {"raw_col": "Force (kN)", "raw_units": "kN"},
+            "force": [
+                {"raw_col": "Force (kN)", "raw_units": "kN"},
+                {"raw_col": "Force (N)", "raw_units": "N"},
+            ],
             "axial_strain": {"raw_col": "AVE2 (%)", "raw_units": "percent"},
         },
         "inversion_flags": {"force": False, "torque": False},

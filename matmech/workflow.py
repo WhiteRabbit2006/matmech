@@ -153,9 +153,15 @@ def run_analysis_workflow(script_path: str, user_config: Dict[str, Any]) -> None
 
     # Convert all relevant source columns to numeric, coercing errors, and clean the DataFrame.
     # This handles cases where CSVs from testing software include non-numeric header/footer rows.
-    source_cols = [
-        s["raw_col"] for s in sources.values() if s.get("raw_col") in full_raw_df.columns
-    ]
+    source_cols = []
+    for s in sources.values():
+        potential_sources = s if isinstance(s, list) else [s]
+        for potential_source in potential_sources:
+            raw_col = potential_source.get("raw_col")
+            if raw_col and raw_col in full_raw_df.columns:
+                source_cols.append(raw_col)
+                if isinstance(s, list):
+                    break
     for col in source_cols:
         full_raw_df[col] = pd.to_numeric(full_raw_df[col], errors="coerce")
 
@@ -168,6 +174,21 @@ def run_analysis_workflow(script_path: str, user_config: Dict[str, Any]) -> None
     tare_options = final_config.get("tare_options", {})
 
     for key, source_info in sources.items():
+        # Handle list of fallback column definitions
+        if isinstance(source_info, list):
+            found_source = None
+            for s in source_info:
+                if isinstance(s, dict) and s.get("raw_col") in full_raw_df.columns:
+                    found_source = s
+                    break
+            if not found_source:
+                raw_cols = [s.get("raw_col", "N/A") for s in source_info]
+                logging.warning(
+                    f"None of the source columns {raw_cols} for '{key}' found in data file. Skipping '{key}'."
+                )
+                continue
+            source_info = found_source
+
         registry_entry = config_defaults.DATA_COLUMN_REGISTRY[key]
         standard_name = registry_entry["standard_name"]
         raw_col, raw_units = source_info["raw_col"], source_info["raw_units"]
