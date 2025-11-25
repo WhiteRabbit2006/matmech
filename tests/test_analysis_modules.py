@@ -274,8 +274,6 @@ def test_calculate_linear_fit():
     assert fit_results_empty == {}
 
 
-
-
 def test_calculate_torsional_properties_rect():
     """Verify that torsional shear stress and strain are calculated correctly."""
     test_data = {
