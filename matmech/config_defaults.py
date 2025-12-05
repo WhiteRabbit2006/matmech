@@ -54,6 +54,7 @@ SOFTWARE_PROFILES: Dict[str, Dict[str, Any]] = {
                 {"raw_col": "Force (kN)", "raw_units": "kN"},
                 {"raw_col": "Force (N)", "raw_units": "N"},
             ],
+            "axial_strain": {"raw_col": "ave2", "raw_units": "unitless"},
         },
         "inversion_flags": {"force": False, "torque": False},
     },

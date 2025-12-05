@@ -231,7 +231,6 @@ def run_analysis_workflow(script_path: str, user_config: Dict[str, Any]) -> None
 
     # === 4. DATA SEGMENTATION ===
     recipe: List[Dict[str, Any]] = final_config["test_recipe"]
-    split_points = [phase["end_time"] for phase in recipe]
 
     # Get the standard name for the time column from the constants
     time_standard_name = TIME_COL
@@ -242,6 +241,29 @@ def run_analysis_workflow(script_path: str, user_config: Dict[str, Any]) -> None
             f"Required time column '{time_standard_name}' not found in processed data. "
             f"Available columns: {clean_df.columns.tolist()}"
         )
+
+    # Auto-set end_time for the final phase if not specified
+    if recipe and ("end_time" not in recipe[-1] or recipe[-1].get("end_time") is None):
+        if not clean_df.empty:
+            last_time = clean_df[time_standard_name].max()
+            recipe[-1]["end_time"] = last_time
+            logging.info(
+                f"Final phase '{recipe[-1]['name']}' had no end_time. "
+                f"Using end of data ({last_time:.2f} s) as phase end."
+            )
+        else:
+            logging.warning("Dataframe is empty, cannot determine end time for final phase.")
+            recipe[-1]["end_time"] = 0
+
+    # Now, validate all phases have an end time, which is required for splitting.
+    for phase in recipe:
+        if "end_time" not in phase or phase.get("end_time") is None:
+            raise ValueError(
+                f"Phase '{phase['name']}' is missing 'end_time', "
+                "which is required for all but the final phase."
+            )
+
+    split_points = [phase["end_time"] for phase in recipe]
 
     data_segments = common_utils.split_data_by_time(
         clean_df, split_points, time_col=time_standard_name
