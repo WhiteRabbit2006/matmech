@@ -1,4 +1,8 @@
 # pyproject.toml
+# This file configures the Python project "matmech" using the TOML format.
+# It specifies project metadata (name, version, authors), dependencies
+# (e.g., pandas, numpy), and build system requirements, following modern
+# Python packaging standards (PEP 517, 518, 621).
 
 [project]
 name = "matmech"
