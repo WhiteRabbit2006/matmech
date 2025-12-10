@@ -20,7 +20,7 @@ import pandas as pd
 
 # noinspection PyPackages
 from matmech import axial_analysis, common_utils, config_defaults, plotting_tools, torsional_analysis
-from matmech.constants import TIME_COL
+from matmech.constants import FORCE_COL, POSITION_COL, TIME_COL
 
 # The Analysis Registry: Maps a string from the config to an analysis function.
 # This makes the workflow extensible without modification.
@@ -228,6 +228,30 @@ def run_analysis_workflow(script_path: str, user_config: Dict[str, Any]) -> None
         clean_df[standard_name] = series
 
     logging.info("Data standardization complete.")
+    logging.info(f"Config remove_turnaround_artifacts: {final_config.get('remove_turnaround_artifacts')}")
+    logging.info(f"Clean DF columns: {clean_df.columns.tolist()}")
+
+    # === 3.5. ARTIFACT REMOVAL ===
+    if final_config.get("remove_turnaround_artifacts", False):
+        # We need to ensure we have the standard columns for position and force
+        # to perform the check.
+        if POSITION_COL in clean_df.columns and FORCE_COL in clean_df.columns and TIME_COL in clean_df.columns:
+            logging.info("Attempting to remove turnaround artifacts (spikes)...")
+            initial_len = len(clean_df)
+            clean_df = common_utils.remove_turnaround_artifacts(
+                clean_df,
+                position_col=POSITION_COL,
+                force_col=FORCE_COL,
+                time_col=TIME_COL,
+                # We use defaults for dynamic sizing (0.5s) and threshold (1.5 sigma)
+            )
+            final_len = len(clean_df)
+            if final_len < initial_len:
+                logging.info(f"Artifact removal finished. Dropped {initial_len - final_len} points.")
+        else:
+            logging.debug(
+                "Skipping artifact removal: required Position, Force, or Time columns not found."
+            )
 
     # === 4. DATA SEGMENTATION ===
     recipe: List[Dict[str, Any]] = final_config["test_recipe"]
@@ -361,6 +385,11 @@ def run_analysis_workflow(script_path: str, user_config: Dict[str, Any]) -> None
                     plot_type = plot_type.lower()
                     format_keys = {**plot_config, "phase_name": phase_name}
                     base_filename = plot_config["output_filename"].format(**format_keys)
+                    
+                    # Append phase name only for multiphase tests
+                    if len(recipe) > 1:
+                        base_filename = f"{base_filename}_{phase_name}"
+                    
                     suffix = ".mp4" if plot_type == "animated" else ".png"
                     filename = base_filename + suffix
                     title = plot_config["title"].format(**format_keys)
