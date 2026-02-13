@@ -157,11 +157,13 @@ def extract_dic_timeseries(
     frame_range: Optional[Tuple[int, int]] = None,
 ) -> pd.DataFrame:
     """
-    Extract time-series of spatially-averaged strain from all VC7 files in a directory.
+    Extract time-series of strain from all VC7 files in a directory.
     
-    This creates a CSV with one row per frame, containing the mean strain values
-    across the entire field of view. Useful for comparing DIC strain with 
-    extensometer or crosshead-based strain measurements.
+    This creates a CSV with one row per frame, containing:
+    - Spatially-averaged strain values (mean_exx, mean_eyy, etc.)
+    - Center-line strain values (DIC_normal_strain, DIC_transverse_strain)
+      which are averages along the center vertical and horizontal lines
+      of the sample, providing more meaningful strain measurements.
     
     Args:
         strain_dir: Directory containing .vc7 files (e.g., "Strain2")
@@ -169,9 +171,7 @@ def extract_dic_timeseries(
         frame_range: Optional (start, end) tuple to limit frames processed
         
     Returns:
-        DataFrame with columns: frame, time_us, time_s, mean_exx, mean_eyy, 
-                                mean_exy, std_exx, std_eyy, std_exy, 
-                                mean_u, mean_v, valid_points
+        DataFrame with strain time-series data
     """
     check_lvpyio()
     
@@ -214,10 +214,70 @@ def extract_dic_timeseries(
             
             valid_count = np.sum(mask & np.isfinite(frame_data.strain_exx))
             
+            # --- Center-line strain extraction ---
+            # Get grid dimensions
+            ny, nx = frame_data.strain_eyy.shape
+
+            # Use centroid of valid data to define "center"
+            # This handles cases where the sample is not perfectly centered in the ROI
+
+            valid_y_idxs, valid_x_idxs = np.where(mask)
+            
+            if len(valid_y_idxs) > 0:
+                # Find "center" of valid region
+                center_y = int(np.median(valid_y_idxs))
+                center_x = int(np.median(valid_x_idxs))
+                
+                # Normal strain (along Y-axis) - take median column of valid area
+                # We use the column that passes continuously through the most valid points
+                col_counts = np.sum(mask, axis=0)
+                best_col_idx = np.argmax(col_counts)
+                
+                # If median X is significantly different from best_col, prefer best_col 
+                # (column with most data)
+                center_col_idx = best_col_idx if col_counts[best_col_idx] > col_counts[center_x] else center_x
+                
+                center_col_eyy = frame_data.strain_eyy[:, center_col_idx]
+                center_col_mask = mask[:, center_col_idx]
+                valid_eyy = center_col_eyy[center_col_mask & np.isfinite(center_col_eyy)]
+                dic_normal_strain = np.nanmean(valid_eyy) if len(valid_eyy) > 0 else np.nan
+                
+                # Transverse strain (along X-axis) - take median row of valid area
+                # We check a few rows around center_y to find one with good data coverage
+                best_row_idx = center_y
+                max_valid_pts = -1
+                
+                # Search +/- 5 rows around center to find best transverse line
+                search_range = range(max(0, center_y-5), min(ny, center_y+6))
+                for r in search_range:
+                    pts = np.sum(mask[r, :])
+                    if pts > max_valid_pts:
+                        max_valid_pts = pts
+                        best_row_idx = r
+                
+                center_row_exx = frame_data.strain_exx[best_row_idx, :]
+                center_row_mask = mask[best_row_idx, :]
+                valid_exx = center_row_exx[center_row_mask & np.isfinite(center_row_exx)]
+                dic_transverse_strain = np.nanmean(valid_exx) if len(valid_exx) > 0 else np.nan
+            else:
+                dic_normal_strain = np.nan
+                dic_transverse_strain = np.nan
+
+            # Calculate instantaneous Poisson's ratio
+            # ν = -ε_transverse / ε_axial
+            if dic_normal_strain != 0 and np.isfinite(dic_normal_strain) and np.isfinite(dic_transverse_strain):
+                poisson_ratio = -dic_transverse_strain / dic_normal_strain
+            else:
+                poisson_ratio = np.nan
+            
             records.append({
                 "frame": frame_data.frame_number,
+
                 "time_us": frame_data.acquisition_time_us,
                 "time_s": frame_data.acquisition_time_us / 1e6,
+                "DIC_normal_strain": dic_normal_strain,
+                "DIC_transverse_strain": dic_transverse_strain,
+                "DIC_poisson_ratio": poisson_ratio,
                 "mean_exx": mean_exx,
                 "mean_eyy": mean_eyy,
                 "mean_exy": mean_exy,
@@ -243,6 +303,8 @@ def extract_dic_timeseries(
         logging.info(f"Saved time-series to {output_csv}")
     
     return df
+
+
 
 
 def extract_full_strain_cube(
@@ -629,9 +691,29 @@ def create_strain_animation(
     # Create figure
     fig, ax = plt.subplots(figsize=figsize)
     
+    # helper to get deformed coordinates
+    def get_deformed_grid(frame_data):
+        # Base grid
+        xx, yy = np.meshgrid(frame_data.grid_x, frame_data.grid_y)
+        # Add displacement if available
+        if hasattr(frame_data, 'displacement_u') and hasattr(frame_data, 'displacement_v'):
+            xx = xx + frame_data.displacement_u
+            yy = yy + frame_data.displacement_v
+        return xx, yy
+
     # Initial plot
+    xx, yy = get_deformed_grid(first_frame)
     data = getattr(first_frame, attr_name)
     masked_data = np.where(first_frame.mask, data, np.nan)
+    
+    # Calculate global bounds for fixed axes during animation
+    # This prevents the camera from "chasing" the sample, making movement obvious
+    x_min, x_max = np.nanmin(xx), np.nanmax(xx)
+    y_min, y_max = np.nanmin(yy), np.nanmax(yy)
+    # Add some padding
+    w, h = x_max - x_min, y_max - y_min
+    ax.set_xlim(x_min - w*0.1, x_max + w*0.1)
+    ax.set_ylim(y_min - h*0.1, y_max + h*0.1)
     
     if vmin < 0 < vmax:
         norm = TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
@@ -653,14 +735,40 @@ def create_strain_animation(
         data = getattr(frame_data, attr_name)
         masked_data = np.where(frame_data.mask, data, np.nan)
         
+        # update coordinates
+        xx_new, yy_new = get_deformed_grid(frame_data)
         im.set_array(masked_data.ravel())
+        
+        # Update mesh coordinates (this makes it move)
+        # pcolormesh returns a QuadMesh, we need to update 'set_array' (colors) and coordinates
+        # Unfortunately QuadMesh coordinates are tricky to update efficiently in older matplotlib versions
+        # safely set coordinates if possible, otherwise we might need disjoint update
+        try:
+             # Standard matplotlib way for QuadMesh
+            im.set_offsets(np.c_[xx_new.ravel(), yy_new.ravel()])
+            # Note: set_offsets expects (N, 2) array for scatter, but QuadMesh is different.
+            # actually pcolormesh is hard to animate geometry changes efficiently without redrawing.
+            # Let's try simpler set_array if coordinates don't change, but here they DO.
+            
+            # Re-drawing is expensive but reliable for changing geometry
+            ax.collections.clear()
+            if vmin < 0 < vmax:
+                new_im = ax.pcolormesh(xx_new, yy_new, masked_data, cmap=cmap, norm=norm, shading="auto")
+            else:
+                new_im = ax.pcolormesh(xx_new, yy_new, masked_data, cmap=cmap, vmin=vmin, vmax=vmax, shading="auto")
+            return [new_im, title]
+            
+        except Exception:
+             # Fallback if complex update fails
+            pass
+
         time_s = frame_data.acquisition_time_us / 1e6
         title.set_text(f"Frame {frame_data.frame_number} - t = {time_s:.2f}s")
         
         if (frame_idx + 1) % 50 == 0:
             logging.info(f"Rendered {frame_idx + 1}/{len(vc7_files)} frames...")
         
-        return [im, title]
+        return [ax.collections[0], title]
     
     anim = FuncAnimation(fig, update, frames=len(vc7_files), blit=True)
     
@@ -759,9 +867,168 @@ def plot_dic_vs_instron(
         plt.show()
 
 
+def plot_poisson_analysis(
+    df: pd.DataFrame,
+    output_path: Optional[str] = None,
+    time_col: str = "time_s",
+    normal_strain_col: str = "DIC_normal_strain",
+    transverse_strain_col: str = "DIC_transverse_strain",
+    poisson_col: str = "DIC_poisson_ratio",
+    figsize: Tuple[float, float] = (14, 10),
+) -> None:
+    """
+    Create a comprehensive Poisson ratio analysis plot.
+    
+    Shows:
+    1. Normal (axial) vs Transverse strain over time
+    2. Strain-strain scatter plot with linear fit for Poisson ratio
+    3. Poisson ratio evolution over time
+    4. Summary statistics
+    
+    Args:
+        df: DataFrame with DIC strain data (from extract_dic_timeseries)
+        output_path: Path to save the figure
+        time_col: Time column name
+        normal_strain_col: Column for normal/axial strain (Eyy)
+        transverse_strain_col: Column for transverse strain (Exx)
+        poisson_col: Column for Poisson ratio
+        figsize: Figure size
+    """
+    try:
+        import matplotlib.pyplot as plt
+        from scipy import stats
+    except ImportError:
+        raise ImportError("matplotlib and scipy required for visualization")
+    
+    # Filter out invalid data
+    valid_mask = (
+        np.isfinite(df[normal_strain_col]) & 
+        np.isfinite(df[transverse_strain_col]) &
+        (df[normal_strain_col] != 0)
+    )
+    df_valid = df[valid_mask].copy()
+    
+    if len(df_valid) == 0:
+        logging.warning("No valid data for Poisson analysis")
+        return
+    
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    
+    # Plot 1: Normal and Transverse strain over time
+    ax1 = axes[0, 0]
+    ax1.plot(df_valid[time_col], df_valid[normal_strain_col], 
+             label="Normal (Eyy)", linewidth=0.8, alpha=0.8, color="tab:blue")
+    ax1.plot(df_valid[time_col], df_valid[transverse_strain_col], 
+             label="Transverse (Exx)", linewidth=0.8, alpha=0.8, color="tab:red")
+    ax1.axhline(y=0, color='k', linestyle='--', linewidth=0.5, alpha=0.5)
+    ax1.set_xlabel("Time (s)")
+    ax1.set_ylabel("Strain")
+    ax1.set_title("DIC Strain Components vs Time")
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Strain-strain scatter with linear fit
+    ax2 = axes[0, 1]
+    ax2.scatter(df_valid[normal_strain_col], df_valid[transverse_strain_col], 
+               s=3, alpha=0.5, c=df_valid[time_col], cmap="viridis")
+    
+    # Linear regression for overall Poisson ratio
+    normal_vals = df_valid[normal_strain_col].values
+    transverse_vals = df_valid[transverse_strain_col].values
+    
+    # Only use data where both strains are reasonable (avoid near-zero division)
+    fit_mask = np.abs(normal_vals) > 0.001  # At least 0.1% strain
+    if fit_mask.sum() > 10:
+        slope, intercept, r_value, p_value, std_err = stats.linregress(
+            normal_vals[fit_mask], transverse_vals[fit_mask]
+        )
+        overall_poisson = -slope
+        
+        # Plot fit line
+        x_fit = np.linspace(normal_vals.min(), normal_vals.max(), 100)
+        y_fit = slope * x_fit + intercept
+        ax2.plot(x_fit, y_fit, 'r-', linewidth=2, 
+                label=f"ν = {overall_poisson:.3f} (R² = {r_value**2:.3f})")
+    else:
+        overall_poisson = np.nanmedian(df_valid[poisson_col])
+    
+    ax2.set_xlabel("Normal Strain (Eyy)")
+    ax2.set_ylabel("Transverse Strain (Exx)")
+    ax2.set_title("Strain-Strain Relationship")
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    cbar = plt.colorbar(ax2.collections[0], ax=ax2)
+    cbar.set_label("Time (s)")
+    
+    # Plot 3: Poisson ratio evolution
+    ax3 = axes[1, 0]
+    if poisson_col in df_valid.columns:
+        # Filter extreme values for visualization
+        poisson_vals = df_valid[poisson_col].values
+        poisson_clipped = np.clip(poisson_vals, 0, 1)  # Physical range for elastomers
+        
+        ax3.plot(df_valid[time_col], poisson_vals, 
+                linewidth=0.5, alpha=0.5, color="gray", label="Raw")
+        
+        # Rolling median for smoothed view
+        window = max(10, len(df_valid) // 100)
+        rolling_poisson = pd.Series(poisson_vals).rolling(window, center=True).median()
+        ax3.plot(df_valid[time_col], rolling_poisson, 
+                linewidth=2, color="tab:green", label=f"Smoothed (n={window})")
+        
+        ax3.axhline(y=0.5, color='k', linestyle='--', linewidth=1, alpha=0.5,
+                   label="Incompressible (ν=0.5)")
+        ax3.axhline(y=overall_poisson, color='r', linestyle='-', linewidth=1.5, alpha=0.8,
+                   label=f"Overall ν = {overall_poisson:.3f}")
+    
+    ax3.set_xlabel("Time (s)")
+    ax3.set_ylabel("Poisson's Ratio (ν)")
+    ax3.set_title("Poisson's Ratio Evolution")
+    ax3.set_ylim(0, 0.7)  # Reasonable range for elastomers
+    ax3.legend(loc="upper right")
+    ax3.grid(True, alpha=0.3)
+    
+    # Plot 4: Summary statistics text box
+    ax4 = axes[1, 1]
+    ax4.axis('off')
+    
+    stats_text = f"""
+    ╔══════════════════════════════════════╗
+    ║    POISSON RATIO ANALYSIS SUMMARY    ║
+    ╠══════════════════════════════════════╣
+    ║                                      ║
+    ║  Overall Poisson Ratio: {overall_poisson:>8.4f}     ║
+    ║                                      ║
+    ║  Normal Strain (Eyy):                ║
+    ║    Range: {df_valid[normal_strain_col].min():>8.4f} to {df_valid[normal_strain_col].max():<8.4f} ║
+    ║    Mean:  {df_valid[normal_strain_col].mean():>8.4f}               ║
+    ║                                      ║
+    ║  Transverse Strain (Exx):            ║
+    ║    Range: {df_valid[transverse_strain_col].min():>8.4f} to {df_valid[transverse_strain_col].max():<8.4f} ║
+    ║    Mean:  {df_valid[transverse_strain_col].mean():>8.4f}               ║
+    ║                                      ║
+    ║  Data Points: {len(df_valid):>6}                  ║
+    ║  Time Range: {df_valid[time_col].min():>6.1f}s to {df_valid[time_col].max():<6.1f}s   ║
+    ╚══════════════════════════════════════╝
+    """
+    ax4.text(0.1, 0.5, stats_text, transform=ax4.transAxes, 
+            fontsize=11, fontfamily='monospace', verticalalignment='center')
+    
+    plt.suptitle("DIC Poisson Ratio Analysis", fontsize=14, fontweight='bold', y=0.98)
+    plt.tight_layout()
+    
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches="tight")
+        logging.info(f"Saved Poisson analysis plot to {output_path}")
+        plt.close()
+    else:
+        plt.show()
+
+
 # ============================================================================
 # Example usage / command-line interface
 # ============================================================================
+
 
 if __name__ == "__main__":
     import argparse
